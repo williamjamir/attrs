@@ -1190,32 +1190,66 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
             if has_factory:
                 init_factory_name = _init_factory_pat.format(a.name)
                 if a.converter is not None:
-                    lines.append(fmt_setter_with_converter(
-                        attr_name,
-                        init_factory_name + "({0})".format(maybe_self)))
                     conv_name = _init_converter_pat.format(a.name)
+                    if not slots and not frozen:
+                        dict_literal_attrs.append(
+                            "'{attr_name}': {c}({arg_name}),".format(
+                                attr_name=attr_name,
+                                c=conv_name,
+                                arg_name=arg_name,
+                            )
+                        )
+                    else:
+                        lines.append(fmt_setter_with_converter(
+                            attr_name,
+                            init_factory_name + "({0})".format(maybe_self)))
                     names_for_globals[conv_name] = a.converter
                 else:
-                    lines.append(fmt_setter(
-                        attr_name,
-                        init_factory_name + "({0})".format(maybe_self)
-                    ))
+                    if not slots and not frozen and not maybe_self:
+                        dict_literal_attrs.append(
+                            "'{attr_name}': {f}(),".format(
+                                attr_name=attr_name,
+                                f=init_factory_name,
+                            )
+                        )
+                    else:
+                        lines.append(fmt_setter(
+                            attr_name,
+                            init_factory_name + "({0})".format(maybe_self)
+                        ))
                 names_for_globals[init_factory_name] = a.default.factory
             else:
                 if a.converter is not None:
-                    lines.append(fmt_setter_with_converter(
-                        attr_name,
-                        "attr_dict['{attr_name}'].default"
-                        .format(attr_name=attr_name)
-                    ))
                     conv_name = _init_converter_pat.format(a.name)
+                    if not slots and not frozen:
+                        dict_literal_attrs.append(
+                            "'{attr_name}': {c}(attr_dict['{attr_name}'].default),".format(
+                                c=conv_name,
+                                attr_name=attr_name,
+                                arg_name=arg_name,
+                            )
+                        )
+                    else:
+                        lines.append(fmt_setter_with_converter(
+                            attr_name,
+                            "attr_dict['{attr_name}'].default"
+                            .format(attr_name=attr_name)
+                        ))
                     names_for_globals[conv_name] = a.converter
                 else:
-                    lines.append(fmt_setter(
-                        attr_name,
-                        "attr_dict['{attr_name}'].default"
-                        .format(attr_name=attr_name)
-                    ))
+                    if not slots and not frozen:
+                        dict_literal_attrs.append(
+                            "'{attr_name}': attr_dict['{attr_name}'].default,".format(
+                                attr_name=attr_name,
+                                arg_name=arg_name,
+                            )
+                        )
+                    else:
+                        lines.append(fmt_setter(
+                            attr_name,
+                            "attr_dict['{attr_name}'].default"
+                            .format(attr_name=attr_name)
+                        ))
         elif a.default is not NOTHING and not has_factory:
             args.append(
                 "{arg_name}=attr_dict['{attr_name}'].default".format(
@@ -1224,7 +1258,7 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
                 )
             )
             if a.converter is not None:
-                if not slots:
+                if not slots and not frozen:
                     dict_literal_attrs.append(
                         "'{attr_name}': {c}({arg_name}),".format(
                             attr_name=attr_name,
@@ -1238,7 +1272,7 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
                     a.converter
                 )
             else:
-                if not slots:
+                if not slots and not frozen:
                     dict_literal_attrs.append(
                         "'{attr_name}': {arg_name},".format(
                             attr_name=attr_name,
@@ -1248,34 +1282,60 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
                 else:
                     lines.append(fmt_setter(attr_name, arg_name))
         elif has_factory:
+            # a.default is NOTHING and there is a factory.
             args.append("{arg_name}=NOTHING".format(arg_name=arg_name))
-            lines.append("if {arg_name} is not NOTHING:"
-                         .format(arg_name=arg_name))
             init_factory_name = _init_factory_pat.format(a.name)
             if a.converter is not None:
-                lines.append("    " + fmt_setter_with_converter(
-                    attr_name, arg_name
-                ))
-                lines.append("else:")
-                lines.append("    " + fmt_setter_with_converter(
-                    attr_name,
-                    init_factory_name + "({0})".format(maybe_self)
-                ))
-                names_for_globals[_init_converter_pat.format(a.name)] = (
+                conv_name = _init_converter_pat.format(attr_name)
+                if not slots and not frozen:
+                    dict_literal_attrs.append(
+                        "'{attr_name}': {c}({arg_name}) if {arg_name} is not NOTHING else {f}({ms})),".format(
+                            c=conv_name,
+                            attr_name=attr_name,
+                            arg_name=arg_name,
+                            f=init_factory_name,
+                            ms=maybe_self,
+                        )
+                    )
+                else:
+                    lines.append("if {arg_name} is not NOTHING:"
+                                .format(arg_name=arg_name))
+                    lines.append("    " + fmt_setter_with_converter(
+                        attr_name, arg_name
+                    ))
+                    lines.append("else:")
+                    lines.append("    " + fmt_setter_with_converter(
+                        attr_name,
+                        init_factory_name + "({0})".format(maybe_self)
+                    ))
+                names_for_globals[conv_name] = (
                     a.converter
                 )
             else:
-                lines.append("    " + fmt_setter(attr_name, arg_name))
-                lines.append("else:")
-                lines.append("    " + fmt_setter(
-                    attr_name,
-                    init_factory_name + "({0})".format(maybe_self)
-                ))
+                if not slots and not frozen and not maybe_self:
+                    # self-factories need to be initialized in a different pass.
+                    dict_literal_attrs.append(
+                        "'{attr_name}': {arg_name} if {arg_name} is not NOTHING else {f}(),".format(
+                            attr_name=attr_name,
+                            arg_name=arg_name,
+                            f=init_factory_name,
+                            ms=maybe_self,
+                        )
+                    )
+                else:
+                    lines.append("if {arg_name} is not NOTHING:"
+                                .format(arg_name=arg_name))
+                    lines.append("    " + fmt_setter(attr_name, arg_name))
+                    lines.append("else:")
+                    lines.append("    " + fmt_setter(
+                        attr_name,
+                        init_factory_name + "({0})".format(maybe_self)
+                    ))
             names_for_globals[init_factory_name] = a.default.factory
         else:
             args.append(arg_name)
             if a.converter is not None:
-                if not slots:
+                if not slots and not frozen:
                     dict_literal_attrs.append(
                         "'{attr_name}': {c}({arg_name}),".format(
                             attr_name=attr_name,
@@ -1289,7 +1349,7 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
                     a.converter
                 )
             else:
-                if not slots:
+                if not slots and not frozen:
                     dict_literal_attrs.append(
                         "'{attr_name}': {arg_name},".format(
                             attr_name=attr_name,
@@ -1300,10 +1360,13 @@ def _attrs_to_init_script(attrs, frozen, slots, post_init, super_attr_map):
                     lines.append(fmt_setter(attr_name, arg_name))
 
     if dict_literal_attrs:
-        lines.append('self.__dict__ = {')
+        dict_literal_lines = []
+        dict_literal_lines.append('self.__dict__ = {')
         for stmt in dict_literal_attrs:
-            lines.append('    ' + stmt)
-        lines.append('}')
+            dict_literal_lines.append('    ' + stmt)
+        dict_literal_lines.append('}')
+
+        lines = dict_literal_lines + lines
 
     if attrs_to_validate:  # we can skip this if there are no validators.
         names_for_globals["_config"] = _config
